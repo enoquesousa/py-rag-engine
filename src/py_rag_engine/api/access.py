@@ -5,7 +5,6 @@ import hmac
 import ipaddress
 import os
 import re
-import secrets
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from urllib.parse import SplitResult, parse_qsl, urlsplit
@@ -13,32 +12,31 @@ from urllib.parse import SplitResult, parse_qsl, urlsplit
 from starlette.types import Scope
 
 _BEARER_TOKEN = re.compile(rb"[A-Za-z0-9._~+/-]+=*")
+_MAX_TOKEN_BYTES = 4096
+_TOKEN_BUFFER_BYTES = 2 + _MAX_TOKEN_BYTES
 _CREDENTIAL_PARAMETERS = {"token", "access_token", "api_key", "authorization", "rag_api_token"}
 Headers = Sequence[tuple[bytes, bytes]]
 
 
 @dataclass(frozen=True, slots=True)
 class AccessConfig:
-    """Startup snapshot with an ephemeral HMAC key and digest, never a plaintext token."""
+    """Startup snapshot with a plaintext credential buffer excluded from repr."""
 
-    token_digest: bytes | None = field(repr=False)
+    token_buffer: bytes | None = field(repr=False)
     local_only: bool
-    comparison_key: bytes | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
-        if self.token_digest is not None:
-            if (self.local_only or self.comparison_key is None
-                    or len(self.comparison_key) != 32 or len(self.token_digest) != 32):
-                raise RuntimeError("Token authentication requires a 32-byte HMAC key and digest.")
-        elif not self.local_only or self.comparison_key is not None:
+        if self.token_buffer is not None:
+            if self.local_only is not False or not _valid_token_buffer(self.token_buffer):
+                raise RuntimeError("Token authentication requires a valid credential buffer.")
+        elif self.local_only is not True:
             raise RuntimeError("An API access mode must be explicitly configured.")
 
     def matches_token(self, token: bytes) -> bool:
-        """Compare fixed-size keyed digests without content-dependent short-circuiting."""
-        if self.comparison_key is None or self.token_digest is None:
+        """Compare 4098-byte buffers without branching on the expected token's length."""
+        if self.token_buffer is None or not _valid_token(token):
             return False
-        candidate = hmac.digest(self.comparison_key, token, "sha256")
-        return hmac.compare_digest(candidate, self.token_digest)
+        return hmac.compare_digest(_token_buffer(token), self.token_buffer)
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> AccessConfig:
@@ -50,16 +48,34 @@ class AccessConfig:
         token = env.get("RAG_API_TOKEN")
         if token is not None:
             encoded = token.encode("ascii", errors="replace")
-            if not 32 <= len(encoded) <= 4096 or not _BEARER_TOKEN.fullmatch(encoded):
+            if not _valid_token(encoded):
                 raise RuntimeError(
                     "RAG_API_TOKEN must contain 32 to 4096 ASCII Bearer-token characters."
                 )
-            comparison_key = secrets.token_bytes(32)
-            return cls(token_digest=hmac.digest(comparison_key, encoded, "sha256"),
-                       local_only=False, comparison_key=comparison_key)
+            return cls(token_buffer=_token_buffer(encoded), local_only=False)
         if local != "1":
             raise RuntimeError("Set RAG_API_TOKEN or explicitly opt in with RAG_API_LOCAL_ONLY=1.")
-        return cls(token_digest=None, local_only=True)
+        return cls(token_buffer=None, local_only=True)
+
+
+def _valid_token(token: bytes) -> bool:
+    return (isinstance(token, bytes) and 32 <= len(token) <= _MAX_TOKEN_BYTES
+            and _BEARER_TOKEN.fullmatch(token) is not None)
+
+
+def _token_buffer(token: bytes) -> bytes:
+    """Encode an already-validated token injectively, without truncating its bytes."""
+    return len(token).to_bytes(2, "big") + token.ljust(_MAX_TOKEN_BYTES, b"\x00")
+
+
+def _valid_token_buffer(buffer: bytes) -> bool:
+    if not isinstance(buffer, bytes) or len(buffer) != _TOKEN_BUFFER_BYTES:
+        return False
+    size = int.from_bytes(buffer[:2], "big")
+    if not 32 <= size <= _MAX_TOKEN_BYTES:
+        return False
+    token = buffer[2:2 + size]
+    return _valid_token(token) and not any(buffer[2 + size:])
 
 
 class AccessDenied(Exception):
@@ -86,7 +102,7 @@ def authorize_request(scope: Scope, config: AccessConfig) -> None:
            for key, _ in headers):
         raise AccessDenied(400, "Forwarding headers are not accepted.")
     _reject_url_credentials(scope.get("query_string", b""))
-    if config.token_digest is not None:
+    if config.token_buffer is not None:
         _authorize_bearer(scope, headers, config)
     else:
         _authorize_local(scope, headers)
@@ -108,8 +124,7 @@ def _authorize_bearer(scope: Scope, headers: Headers, config: AccessConfig) -> N
     if authorization is None:
         raise AccessDenied(401, "Bearer authentication required.")
     scheme, separator, token = authorization.partition(b" ")
-    if (scheme.lower() != b"bearer" or not separator or not 32 <= len(token) <= 4096
-            or not _BEARER_TOKEN.fullmatch(token)):
+    if scheme.lower() != b"bearer" or not separator or not _valid_token(token):
         raise AccessDenied(401, "Invalid Bearer credentials.")
     if scope.get("scheme") != "https" and not _loopback_peer(scope):
         raise AccessDenied(403, "HTTPS or a loopback connection is required.")

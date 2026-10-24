@@ -263,10 +263,12 @@ including rejection and disconnect paths. Responses through the middleware
 carry `Cache-Control: no-store`. WebSocket connections are closed; this API has
 no WebSocket authentication protocol.
 
-In token mode, one `Authorization: Bearer ...` header is checked against an
-HMAC-SHA256 digest with constant-length `hmac.compare_digest`. A random 32-byte
-comparison key is generated for each configuration snapshot; neither the key
-nor the digest appears in its representation. The configured
+In token mode, one `Authorization: Bearer ...` header is checked with
+`hmac.compare_digest`. The validated token and its length are encoded into an
+internal fixed-size buffer so the comparison uses equal-sized inputs without
+content-dependent short-circuiting. The expected buffer is omitted from the
+configuration representation. Padding is not encryption: it retains the token
+bytes in process memory. The configured
 token must be 32–4096 ASCII Bearer-token characters. Missing, empty, malformed,
 duplicate, and incorrect credentials are distinguished only with fixed errors;
 their values are never included in those errors. Credential query parameters
@@ -292,8 +294,9 @@ The single token grants access to the entire corpus. `metadata_filter` and
 `embedding_model` select retrieval results; they are not tenant permissions.
 There are no sessions, JWTs, refresh tokens, user identities, or document ACLs.
 Changing the token requires restarting the application, which replaces the
-digest snapshot. The plaintext environment value remains accessible to the
-process and its administrators. See [SECURITY.md](../SECURITY.md) for the
+credential snapshot. The plaintext token remains in the process environment
+and configuration memory, accessible to the process and its administrators.
+See [SECURITY.md](../SECURITY.md) for the
 separate database/model trust boundaries and resource limits.
 
 ## Data Layout

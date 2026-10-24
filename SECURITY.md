@@ -26,18 +26,20 @@ access policy. A normal browser navigation cannot attach a Bearer header.
 
 Only the Authorization header carries API credentials. Duplicate headers and
 credential query parameters are rejected, including encoded names and empty values.
-The access configuration keeps an HMAC-SHA256 digest and a random 32-byte
-comparison key generated for that configuration snapshot. It recomputes the
-request digest with the same key and compares fixed-length digests in constant
-time. Neither the key nor the digest appears in its representation. This
-mechanism is for a randomly generated service token, not a human password.
-It does not remove the original secret from the process environment.
+The access configuration keeps the validated token in an internal fixed-size
+buffer, including its length, and omits that buffer from its representation.
+Each valid incoming token is normalized the same way and compared with
+`hmac.compare_digest`, using equal-sized inputs without content-dependent
+short-circuiting. This is direct comparison of a configured service credential;
+the padding is not encryption or password hashing. The token remains readable
+in the process environment and configuration memory. Do not serialize or dump
+the access configuration, and protect process dumps and debug interfaces.
 Use a secret manager or a restricted environment configuration, never commit
 real `.env` files or place the secret in a URL. Keep request headers out of
 proxy/application access logs. The policy's error messages do not echo values.
 
-Replace the token and restart every worker to rotate it. The old digest remains
-valid in a running worker until that worker is stopped; there is no refresh
+Replace the token and restart every worker to rotate it. The old credential
+snapshot remains valid in a running worker until that worker is stopped; there is no refresh
 endpoint or automatic credential reload.
 
 ## Transport and proxies

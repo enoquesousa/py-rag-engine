@@ -5,6 +5,7 @@ import asyncio
 import tempfile
 from collections import deque
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -108,28 +109,44 @@ def test_config_does_not_reveal_token_and_token_wins_over_local_flag(monkeypatch
     assert result.status == 401
 
 
-def test_token_configurations_have_independent_keys_without_exposing_sensitive_state():
-    first = AccessConfig.from_env({"RAG_API_TOKEN": TOKEN})
-    second = AccessConfig.from_env({"RAG_API_TOKEN": TOKEN})
-    assert first.comparison_key != second.comparison_key
-    assert first.token_digest != second.token_digest
-    for config in (first, second):
-        assert config.comparison_key is not None and len(config.comparison_key) == 32
-        assert config.token_digest is not None and len(config.token_digest) == 32
-        assert repr(config.comparison_key) not in repr(config)
-        assert repr(config.token_digest) not in repr(config)
-        result = _invoke(APIAccessMiddleware(_ok, config), _scope(headers=[AUTH]))
-        assert result.status == 200
+@pytest.mark.parametrize(("size", "other_size"), [(32, 33), (33, 32), (4095, 4096), (4096, 4095)])
+def test_token_prefixes_remain_distinct_at_the_size_boundaries(size, other_size):
+    token = "a" * size
+    config = AccessConfig.from_env({"RAG_API_TOKEN": token})
+    guarded = APIAccessMiddleware(_ok, config)
+    valid = _scope(headers=[(b"authorization", b"Bearer " + token.encode())])
+    assert _invoke(guarded, valid).status == 200
+    prefix = _scope(headers=[(b"authorization", b"Bearer " + b"a" * other_size)])
+    assert _invoke(guarded, prefix, forbid_receive=True).status == 401
+    assert token not in repr(config)
 
 
-@pytest.mark.parametrize(("digest", "key", "local"), [
-    (b"d" * 32, None, False), (b"d" * 32, b"k" * 31, False),
-    (b"d" * 31, b"k" * 32, False), (b"d" * 32, b"k" * 32, True),
-    (None, b"k" * 32, True), (None, None, False),
+@pytest.mark.parametrize("candidate", [
+    b"", b"a" * 31, b"a" * 4097, b"a" * 32 + b"\x00", b"a" * 31 + b"\x00",
+    "é" * 32, ("é" * 32).encode(), None,
 ])
-def test_incomplete_or_conflicting_access_state_fails_closed(digest, key, local):
+def test_invalid_candidates_do_not_match_the_configured_token(candidate):
+    config = AccessConfig.from_env({"RAG_API_TOKEN": "a" * 32})
+    assert config.matches_token(candidate) is False
+
+
+def test_local_only_configuration_has_no_token_to_match():
+    config = AccessConfig.from_env({"RAG_API_LOCAL_ONLY": "1"})
+    assert config.matches_token(TOKEN.encode()) is False
+
+
+@pytest.mark.parametrize("buffer", [None, b"", b"a" * 4098, b"\x00" * 4098])
+def test_missing_or_malformed_token_state_fails_closed(buffer):
     with pytest.raises(RuntimeError):
-        AccessConfig(token_digest=digest, local_only=local, comparison_key=key)
+        AccessConfig(token_buffer=buffer, local_only=False)
+
+
+def test_token_state_cannot_enable_local_mode_or_use_nonzero_padding():
+    config = AccessConfig.from_env({"RAG_API_TOKEN": TOKEN})
+    with pytest.raises(RuntimeError):
+        replace(config, local_only=True)
+    with pytest.raises(RuntimeError):
+        replace(config, token_buffer=config.token_buffer[:-1] + b"x")
 
 
 @pytest.mark.parametrize(("method", "path"), [
