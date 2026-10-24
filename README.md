@@ -11,7 +11,7 @@
 [![CodeQL](https://github.com/enoquesousa/py-rag-engine/actions/workflows/codeql.yml/badge.svg)](https://github.com/enoquesousa/py-rag-engine/actions/workflows/codeql.yml)
 [![Dependency review](https://img.shields.io/badge/dependency%20review-in%20CI-0085CA?style=flat&logo=githubactions&logoColor=white)](https://github.com/enoquesousa/py-rag-engine/actions/workflows/ci.yml)
 [![Publish](https://img.shields.io/badge/Publish-release%20%7C%20manual-blue?style=flat&logo=githubactions&logoColor=white)](https://github.com/enoquesousa/py-rag-engine/actions/workflows/publish.yml)
-[![Python](https://img.shields.io/badge/Python-3.10%2B-blue?style=flat&logo=python&logoColor=white)](https://github.com/enoquesousa/py-rag-engine/blob/main/pyproject.toml)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-blue?style=flat&logo=python&logoColor=white)](https://github.com/enoquesousa/py-rag-engine/blob/main/pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat)](LICENSE)
 [![Last Commit](https://img.shields.io/github/last-commit/enoquesousa/py-rag-engine?style=flat)](https://github.com/enoquesousa/py-rag-engine/commits)
 [![Ruff](https://img.shields.io/badge/Ruff-linting-261230?style=flat&logo=ruff&logoColor=white)](https://github.com/astral-sh/ruff)
@@ -56,15 +56,14 @@ PDF / Markdown
 
 ## Demo (quick smoke test)
 
-Create a virtual environment, install the package, and run a fast wiring check against a small sample document — no Postgres or LM Studio required for the unit suite.
+Use Python 3.11 or 3.12 for the constrained CI environment below. Create a virtual environment, install the package, and run a fast wiring check against a small sample document — no Postgres or LM Studio required for the unit suite.
 
 **Linux / macOS (bash)**
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e ".[api,embeddings]"
-pip install pytest
+python -m pip install -c constraints/api-ci.txt -e ".[api]" pytest httpx
 
 pytest -q
 ```
@@ -74,13 +73,12 @@ pytest -q
 ```powershell
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -e ".[api,embeddings]"
-pip install pytest
+python -m pip install -c constraints/api-ci.txt -e ".[api]" pytest httpx
 
 python -m pytest -q
 ```
 
-To exercise the **full pipeline** end-to-end (ingest → embed → store → hybrid search → rerank), spin up Postgres + LM Studio (see "Infrastructure setup" below) and run `python scripts\demo_rerank.py data\gdp_document_0.pdf`. To drive the REST API, run `uvicorn "py_rag_engine.api:create_app" --factory --host 127.0.0.1 --port 8001`. See [docs/architecture.md](docs/architecture.md) and [docs/evaluation.md](docs/evaluation.md) for the full module map and metric definitions.
+To exercise the **full pipeline** end-to-end (ingest → embed → store → hybrid search → rerank), install the `embeddings` extra, spin up Postgres + LM Studio (see Quick Start below), and run `python scripts\demo_rerank.py data\gdp_document_0.pdf`. The REST API requires an explicit access mode before it starts; follow the local or Bearer setup below. See [docs/architecture.md](docs/architecture.md) and [docs/evaluation.md](docs/evaluation.md) for the full module map and metric definitions.
 
 ## Features
 
@@ -93,17 +91,17 @@ To exercise the **full pipeline** end-to-end (ingest → embed → store → hyb
 | Retrieval | **Three-stage**: dense pgvector ANN + Postgres FTS (`ts_rank_cd`, `websearch_to_tsquery`) fused via **Reciprocal Rank Fusion (RRF, k=60)**, then re-ranked by a **Cross-Encoder**. |
 | Re-ranking | `CrossEncoderReranker` (default `ms-marco-MiniLM-L-6-v2`) with lazy model loading and an injectable `predict` for tests. |
 | Generation | Optional **grounded answer** via an LM Studio chat model (`generate_answer` assembles the prompt + citation contexts). |
-| API | **FastAPI** with `/health`, `/documents` (upload + list), and `/query` exposing four retrieval modes via `use_hybrid` / `use_rerank` toggles. |
+| API | **FastAPI** with `/health`, `/documents` (upload + list), and `/query`; shared Bearer authentication or explicit restricted local access, with a 10 MiB total request-body limit. |
 | Evaluation | Offline **RAGAS** runner with faithfulness / answer relevancy / context precision; outputs a timestamped JSON report and a config ranking. |
-| Tests | **132** unit / integration tests on Python 3.11 and 3.12 in CI; integration suite gated on `TEST_POSTGRES_URL` + `LM_STUDIO_BASE_URL`. |
+| Tests | Unit and authentication regression tests on Python 3.11 and 3.12 in CI; the external integration test is gated on `TEST_POSTGRES_URL` + `LM_STUDIO_BASE_URL`. |
 
 ## Tech stack
 
 | Component | Role |
 | --------- | ---- |
-| Python 3.10+ | Language and runtime (CI runs 3.11 and 3.12) |
+| Python 3.11+ | Language and runtime (CI runs 3.11 and 3.12) |
 | PostgreSQL 16 + pgvector | Vector storage, HNSW cosine ANN, FTS via `tsvector` |
-| SQLAlchemy 2 + psycopg 3 | DB engine and connection pool |
+| SQLAlchemy 2.1+ with asyncio support + psycopg 3 | DB engine, connection pool, and escaping of connection fields |
 | LM Studio (OpenAI-compatible) | Embeddings (`bge-m3`) and chat (`qwen2.5-7b-instruct`) |
 | sentence-transformers | Cross-Encoder re-ranking and local semantic embeddings |
 | langchain-text-splitters | Recursive character chunking |
@@ -117,7 +115,7 @@ To exercise the **full pipeline** end-to-end (ingest → embed → store → hyb
 
 | Requirement | Version tested | Notes |
 |---|---|---|
-| Python | 3.11 / 3.12 / 3.14 | `>=3.10` per `pyproject.toml` |
+| Python | 3.11 / 3.12 in CI | `>=3.11` per `pyproject.toml`; required by SQLAlchemy 2.1 |
 | PostgreSQL + pgvector | pg16 + pgvector 0.8.2 | via Docker (see below) |
 | LM Studio | any | OpenAI-compatible server on `localhost:1234` |
 | Embedding model | `gpustack/bge-m3-GGUF` (bge-m3-Q8_0) | 1024d, multilingual |
@@ -149,22 +147,23 @@ pip install pytest
 
 There is **no PyPI publish workflow yet** — install from source as shown above. A `publish.yml` workflow would build wheels/sdists on release and upload them via PyPI trusted publishing; the badge link above is wired so that any future publish workflow renders without further edits.
 
-**Dependency review** is a recommended CI add-on (via `actions/dependency-review-action`) and would run on every pull request alongside lint and tests. The current `ci.yml` runs the test matrix only.
+The current `ci.yml` runs the Python test matrix, `pip check`, an audit of installed API/test dependencies, and a package build. `constraints/api-ci.txt` fixes that test environment without installing model weights or the optional embeddings/evaluation stacks. Those optional stacks need their own deployment-specific dependency review. CodeQL runs in its separate workflow.
 
 ## Quick Start
 
 ### 1. Postgres + pgvector via Docker
 
 ```powershell
-$env:POSTGRES_PASSWORD = "<choose-a-strong-password>"
+$password = Read-Host "Postgres password" -AsSecureString
+$env:POSTGRES_PASSWORD = [System.Net.NetworkCredential]::new("", $password).Password
 $env:POSTGRES_DB       = "rag"
 $env:POSTGRES_PORT     = "5434"
 
 docker run -d `
   --name rag-pgvector `
-  -e POSTGRES_PASSWORD=$env:POSTGRES_PASSWORD `
-  -e POSTGRES_DB=$env:POSTGRES_DB `
-  -p "$($env:POSTGRES_PORT):5432" `
+  --env POSTGRES_PASSWORD `
+  --env POSTGRES_DB `
+  -p "127.0.0.1:$($env:POSTGRES_PORT):5432" `
   pgvector/pgvector:pg16
 ```
 
@@ -176,16 +175,32 @@ Install [LM Studio](https://lmstudio.ai), download `gpustack/bge-m3-GGUF` (embed
 Invoke-RestMethod http://localhost:1234/v1/models | Select-Object -ExpandProperty data | Format-Table id
 ```
 
-### 3. Run the REST API
+### 3. Run the REST API locally
+
+This opt-in allows clients on the same machine to read and ingest the entire
+corpus without a token. The app checks the actual peer, `Host`, `Origin`, and
+browser fetch metadata. Keep both Postgres and LM Studio on loopback. A missing
+access mode or an empty configured token prevents the API factory from starting.
+Do not publish this token-free mode through a proxy; use Bearer mode for remote
+access, including when a proxy connects to the app over loopback.
 
 ```powershell
-$env:EVAL_POSTGRES_URL     = "postgresql+psycopg://postgres:$env:POSTGRES_PASSWORD@localhost:5434/rag"
+Remove-Item Env:\EVAL_POSTGRES_URL -ErrorAction SilentlyContinue
+$env:POSTGRES_USER        = "postgres"
+$env:POSTGRES_HOST        = "127.0.0.1"
+# POSTGRES_PASSWORD, POSTGRES_DB, and POSTGRES_PORT come from step 1.
+$env:RAG_API_LOCAL_ONLY   = "1"
 $env:LM_STUDIO_BASE_URL    = "http://localhost:1234"
 $env:LM_STUDIO_EMBED_MODEL = "text-embedding-bge-m3"
 $env:LM_STUDIO_CHAT_MODEL  = "qwen2.5-7b-instruct"
 
-.venv\Scripts\python.exe -m uvicorn "py_rag_engine:api.create_app" --factory --host 127.0.0.1 --port 8001
+.venv\Scripts\python.exe -m uvicorn "py_rag_engine.api:create_app" --factory --host 127.0.0.1 --port 8001 --no-proxy-headers
 ```
+
+If `RAG_API_TOKEN` is already set, it takes precedence over local mode and every
+request must authenticate. Explicitly remove that variable only when you intend
+to use the local, token-free mode. The separate database fields are escaped by
+SQLAlchemy; avoid constructing a DSN by interpolating a password into a URL.
 
 ### 4. Drive it with curl
 
@@ -203,6 +218,54 @@ curl -X POST http://127.0.0.1:8001/query -H "Content-Type: application/json" \
   -d '{"question":"How does HNSW work in pgvector?","top_k":3,
        "use_hybrid":true,"use_rerank":true,"generate_answer":true}'
 ```
+
+### Bearer access and HTTPS
+
+For authenticated access, set `RAG_API_TOKEN` to a randomly generated secret of
+32–4096 ASCII Bearer-token characters. The app uses the token for every HTTP
+route, including `/health`, `/docs`, and `/openapi.json`. It is a shared service
+credential: its holder can read and ingest all documents. There are no user
+accounts, tenant boundaries, JWTs, refresh tokens, or per-document permissions.
+
+For example, in bash, after configuring the database and LM Studio:
+
+```bash
+export RAG_API_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+unset RAG_API_LOCAL_ONLY
+python -m uvicorn "py_rag_engine.api:create_app" --factory \
+  --host 0.0.0.0 --port 8001 --no-proxy-headers \
+  --ssl-certfile /run/secrets/rag-server.crt \
+  --ssl-keyfile /run/secrets/rag-server.key
+```
+
+Provision a certificate valid for your service name and trusted by clients.
+Restrict access to the key files. For a local client using that certificate:
+
+```bash
+printf 'Authorization: Bearer %s\n' "$RAG_API_TOKEN" |
+  curl --fail --header @- --cacert /path/to/trusted-ca.crt \
+    https://localhost:8001/health
+```
+
+Use the `Authorization: Bearer ...` header on uploads and queries as well. Never
+put the token in a URL: credential query parameters are rejected, including
+encoded names and empty values. Duplicate or malformed authorization headers
+are rejected. Ordinary browser navigation does not add a Bearer header, so use
+a header-capable API client to fetch protected documentation in this mode.
+
+Bearer requests require HTTPS unless the actual connection peer is loopback.
+For TLS termination, use a trusted proxy on the same host, bind Uvicorn to
+loopback, keep `--no-proxy-headers`, and strip `Forwarded` and all
+`X-Forwarded-*` headers before forwarding. The app rejects these headers rather
+than trusting client-supplied connection metadata. An external proxy hop over
+plaintext is not supported.
+
+Authentication runs before FastAPI parses a request body. The total body limit
+is **10 MiB**, including multipart framing, so an upload file must be smaller.
+Bodies are spooled to a temporary file after 1 MiB and closed on completion or
+failure. This is not a global concurrency limit or a limit on decompressed PDF
+content and model work. Configure those resource controls at deployment time.
+See [SECURITY.md](SECURITY.md) for credential lifetimes and trust boundaries.
 
 ### Retrieval modes (single endpoint)
 
@@ -284,6 +347,7 @@ The `LMStudioClient` wraps every embedding / chat call with retries on `OSError`
 | [LICENSE](LICENSE) | MIT License |
 | [docs/architecture.md](docs/architecture.md) | Module map, pipeline diagram, data flow |
 | [docs/evaluation.md](docs/evaluation.md) | RAGAS metrics, run modes, report schema |
+| [SECURITY.md](SECURITY.md) | API access, credentials, transport, and deployment boundaries |
 | [`pyproject.toml`](pyproject.toml) | Build config, optional extras (`api`, `embeddings`, `eval`), Ruff settings |
 
 ## Project layout
@@ -303,7 +367,7 @@ The `LMStudioClient` wraps every embedding / chat call with retries on `OSError`
 | `src/py_rag_engine/retrieval/hybrid.py` | `retrieve_hybrid`, `reciprocal_rank_fusion` |
 | `src/py_rag_engine/retrieval/rerank.py` | `CrossEncoderReranker`, `rerank_candidates` |
 | `src/py_rag_engine/retrieval/service.py` | `retrieve_with_rerank`, `retrieve_hybrid_with_rerank` |
-| `src/py_rag_engine/api/` | FastAPI factory + lifespan, REST routes, Pydantic schemas |
+| `src/py_rag_engine/api/` | FastAPI factory + lifespan, access policy, ASGI body gate, REST routes, schemas |
 | `src/py_rag_engine/generation/lm_studio_chat.py` | `generate_answer` grounded in context |
 | `src/py_rag_engine/evaluation/` | Gold-standard loader, metrics, official-RAGAS adapter, `EvalRunner` |
 | `scripts/demo_rerank.py` | E2E demo CLI (dense + Cross-Encoder rerank) |
@@ -317,33 +381,36 @@ The `LMStudioClient` wraps every embedding / chat call with retries on `OSError`
 ## Tests
 
 ```bash
-pip install -e ".[api,embeddings]"
-pip install pytest
-pytest -q
+python -m pip install -c constraints/api-ci.txt -e ".[api]" pytest httpx
+env -u TEST_POSTGRES_URL -u LM_STUDIO_BASE_URL python -m pytest -q
 ```
 
-```text
-132 passed, 1 skipped
-```
-
-The single skipped test is `tests/test_postgres_integration.py`, which is gated on `TEST_POSTGRES_URL` + `LM_STUDIO_BASE_URL` and embeds three sentences round-trip through pgvector.
+The normal suite uses fake database/model clients and does not need model
+downloads. On PowerShell, remove `Env:\TEST_POSTGRES_URL` and
+`Env:\LM_STUDIO_BASE_URL` before running `python -m pytest -q`.
+`tests/test_postgres_integration.py` is skipped unless both variables are set.
 
 ### Integration test (full round-trip)
 
+Use a **disposable database**: this test drops and recreates the `embeddings`
+table. Set the `POSTGRES_*` fields for that database, then generate the DSN
+through `PostgresConfig` so special characters are escaped correctly. The
+captured command below does not print the DSN to the terminal.
+
 ```powershell
-$env:POSTGRES_PASSWORD         = "<your-password>"
-$env:TEST_POSTGRES_URL         = "postgresql+psycopg://postgres:$env:POSTGRES_PASSWORD@localhost:5434/rag"
+Remove-Item Env:\EVAL_POSTGRES_URL -ErrorAction SilentlyContinue
+$env:TEST_POSTGRES_URL = python -c "from py_rag_engine.config import PostgresConfig; print(PostgresConfig.from_env().url)"
 $env:LM_STUDIO_BASE_URL        = "http://localhost:1234"
 $env:LM_STUDIO_EMBEDDING_MODEL = "text-embedding-bge-m3"
 $env:STORAGE_EMBEDDING_MODEL   = "bge-m3"
-python -m pytest -q
+python -m pytest -q tests/test_postgres_integration.py
+Remove-Item Env:\TEST_POSTGRES_URL
 ```
 
 ### Coverage
 
 ```bash
-pip install -e ".[api,embeddings]"
-pip install pytest pytest-cov
+pip install -c constraints/api-ci.txt -e ".[api]" pytest httpx pytest-cov
 pytest --cov=py_rag_engine --cov-report=term-missing
 ```
 

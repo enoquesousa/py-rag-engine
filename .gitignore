@@ -39,6 +39,15 @@ pip-wheel-metadata/
 # Logs
 *.log
 
+# Local credentials and TLS material
+.env
+.env.*
+!.env.example
+certs/
+secrets/
+*.key
+*.pem
+
 # Local datasets and generated ingestion results
 data/*.pdf
 data/*.PDF

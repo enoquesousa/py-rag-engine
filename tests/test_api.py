@@ -15,7 +15,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from py_rag_engine.api.routes import router
+from py_rag_engine.api import create_app
 from py_rag_engine.retrieval import CrossEncoderReranker
 from py_rag_engine.storage import EmbeddingInput, SimilaritySearchResult
 
@@ -97,14 +97,19 @@ async def _test_lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 @pytest.fixture()
 def client(monkeypatch) -> Generator[TestClient, None, None]:
+    token = "synthetic-api-test-token-0123456789abcdef"
+    monkeypatch.setenv("RAG_API_TOKEN", token)
+    monkeypatch.delenv("RAG_API_LOCAL_ONLY", raising=False)
+    monkeypatch.setattr("py_rag_engine.api.app._lifespan", _test_lifespan)
     monkeypatch.setattr(
         "py_rag_engine.api.routes.generate_answer",
         _stub_generate,
     )
-    app = FastAPI(lifespan=_test_lifespan)
-    app.include_router(router)
+    app = create_app()
     # Use as context manager so the lifespan (app.state setup) runs before tests.
-    with TestClient(app) as c:
+    with TestClient(
+        app, base_url="https://testserver", headers={"Authorization": f"Bearer {token}"}
+    ) as c:
         yield c
 
 

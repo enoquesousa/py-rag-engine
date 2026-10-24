@@ -1,8 +1,9 @@
 """End-to-end smoke test of search.py + reranker.py against real services.
 
 Requires:
-  - pgvector running on POSTGRES_HOST:POSTGRES_PORT (defaults below match the
-    repo's docker-compose: localhost:5434, user=postgres, db=rag, pw=admin).
+  - pgvector configured through EVAL_POSTGRES_URL or POSTGRES_* parts.
+    POSTGRES_PASSWORD is required when the full URL is unset. Set
+    POSTGRES_PORT=5434 for the local Docker example in the README.
   - LM Studio listening on http://localhost:1234 with bge-m3 embeddings.
   - flashrank installed (pip install 'py-rag-engine[rerank]').
 
@@ -25,7 +26,7 @@ from sqlalchemy import create_engine, text as sql_text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from py_rag_engine.clients import LMStudioClient
-from py_rag_engine.config import LMStudioConfig
+from py_rag_engine.config import LMStudioConfig, PostgresConfig
 from py_rag_engine.reranker import FlashrankReranker, rerank_documents
 from py_rag_engine.search import AsyncHybridSearcher
 from py_rag_engine.storage import EmbeddingInput, PostgresEmbeddingStore
@@ -47,16 +48,8 @@ CORPUS = [
 
 
 def _conn_url() -> str:
-    """Postgres URL with sensible defaults for the repo's docker-compose."""
-    full = os.environ.get("EVAL_POSTGRES_URL")
-    if full:
-        return full
-    pw = os.environ.get("POSTGRES_PASSWORD", "admin")
-    user = os.environ.get("POSTGRES_USER", "postgres")
-    host = os.environ.get("POSTGRES_HOST", "localhost")
-    port = os.environ.get("POSTGRES_PORT", "5434")
-    db = os.environ.get("POSTGRES_DB", "rag")
-    return f"postgresql+psycopg://{user}:{pw}@{host}:{port}/{db}"
+    """Use the shared credential validation and URL escaping rules."""
+    return PostgresConfig.from_env().url
 
 
 def _sha256(text: str) -> str:
@@ -128,7 +121,7 @@ def main() -> int:
     table = "demo_async_hybrid"
 
     banner("End-to-end demo: AsyncHybridSearcher + FlashrankReranker")
-    print(f"Postgres   : {sync_url}")
+    print("Postgres   : configured")
     print(f"LM Studio  : http://localhost:1234   model={embed_model}")
 
     embedder = LMStudioClient(LMStudioConfig(embed_model=embed_model))
