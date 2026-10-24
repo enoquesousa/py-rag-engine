@@ -26,8 +26,12 @@ access policy. A normal browser navigation cannot attach a Bearer header.
 
 Only the Authorization header carries API credentials. Duplicate headers and
 credential query parameters are rejected, including encoded names and empty values.
-The access configuration keeps a SHA-256 digest and uses a constant-length
-comparison. It does not remove the original secret from the process environment.
+The access configuration keeps an HMAC-SHA256 digest and a random 32-byte
+comparison key generated for that configuration snapshot. It recomputes the
+request digest with the same key and compares fixed-length digests in constant
+time. Neither the key nor the digest appears in its representation. This
+mechanism is for a randomly generated service token, not a human password.
+It does not remove the original secret from the process environment.
 Use a secret manager or a restricted environment configuration, never commit
 real `.env` files or place the secret in a URL. Keep request headers out of
 proxy/application access logs. The policy's error messages do not echo values.

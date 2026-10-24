@@ -263,8 +263,10 @@ including rejection and disconnect paths. Responses through the middleware
 carry `Cache-Control: no-store`. WebSocket connections are closed; this API has
 no WebSocket authentication protocol.
 
-In token mode, one `Authorization: Bearer ...` header is checked against a
-SHA-256 digest with constant-length `hmac.compare_digest`. The configured
+In token mode, one `Authorization: Bearer ...` header is checked against an
+HMAC-SHA256 digest with constant-length `hmac.compare_digest`. A random 32-byte
+comparison key is generated for each configuration snapshot; neither the key
+nor the digest appears in its representation. The configured
 token must be 32–4096 ASCII Bearer-token characters. Missing, empty, malformed,
 duplicate, and incorrect credentials are distinguished only with fixed errors;
 their values are never included in those errors. Credential query parameters

@@ -1,11 +1,11 @@
 """API-only access policy; importing the library does not require API credentials."""
 from __future__ import annotations
 
-import hashlib
 import hmac
 import ipaddress
 import os
 import re
+import secrets
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from urllib.parse import SplitResult, parse_qsl, urlsplit
@@ -19,14 +19,26 @@ Headers = Sequence[tuple[bytes, bytes]]
 
 @dataclass(frozen=True, slots=True)
 class AccessConfig:
-    """Startup snapshot containing a token digest, never the configured plaintext token."""
+    """Startup snapshot with an ephemeral HMAC key and digest, never a plaintext token."""
 
     token_digest: bytes | None = field(repr=False)
     local_only: bool
+    comparison_key: bytes | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
-        if self.token_digest is None and not self.local_only:
+        if self.token_digest is not None:
+            if (self.local_only or self.comparison_key is None
+                    or len(self.comparison_key) != 32 or len(self.token_digest) != 32):
+                raise RuntimeError("Token authentication requires a 32-byte HMAC key and digest.")
+        elif not self.local_only or self.comparison_key is not None:
             raise RuntimeError("An API access mode must be explicitly configured.")
+
+    def matches_token(self, token: bytes) -> bool:
+        """Compare fixed-size keyed digests without content-dependent short-circuiting."""
+        if self.comparison_key is None or self.token_digest is None:
+            return False
+        candidate = hmac.digest(self.comparison_key, token, "sha256")
+        return hmac.compare_digest(candidate, self.token_digest)
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> AccessConfig:
@@ -42,7 +54,9 @@ class AccessConfig:
                 raise RuntimeError(
                     "RAG_API_TOKEN must contain 32 to 4096 ASCII Bearer-token characters."
                 )
-            return cls(token_digest=hashlib.sha256(encoded).digest(), local_only=False)
+            comparison_key = secrets.token_bytes(32)
+            return cls(token_digest=hmac.digest(comparison_key, encoded, "sha256"),
+                       local_only=False, comparison_key=comparison_key)
         if local != "1":
             raise RuntimeError("Set RAG_API_TOKEN or explicitly opt in with RAG_API_LOCAL_ONLY=1.")
         return cls(token_digest=None, local_only=True)
@@ -73,7 +87,7 @@ def authorize_request(scope: Scope, config: AccessConfig) -> None:
         raise AccessDenied(400, "Forwarding headers are not accepted.")
     _reject_url_credentials(scope.get("query_string", b""))
     if config.token_digest is not None:
-        _authorize_bearer(scope, headers, config.token_digest)
+        _authorize_bearer(scope, headers, config)
     else:
         _authorize_local(scope, headers)
 
@@ -89,7 +103,7 @@ def _reject_url_credentials(query: bytes) -> None:
         raise AccessDenied(400, "Credentials are accepted only in the Authorization header.")
 
 
-def _authorize_bearer(scope: Scope, headers: Headers, expected_digest: bytes) -> None:
+def _authorize_bearer(scope: Scope, headers: Headers, config: AccessConfig) -> None:
     authorization = single_header(headers, b"authorization")
     if authorization is None:
         raise AccessDenied(401, "Bearer authentication required.")
@@ -99,7 +113,7 @@ def _authorize_bearer(scope: Scope, headers: Headers, expected_digest: bytes) ->
         raise AccessDenied(401, "Invalid Bearer credentials.")
     if scope.get("scheme") != "https" and not _loopback_peer(scope):
         raise AccessDenied(403, "HTTPS or a loopback connection is required.")
-    if not hmac.compare_digest(hashlib.sha256(token).digest(), expected_digest):
+    if not config.matches_token(token):
         raise AccessDenied(401, "Invalid Bearer credentials.")
 
 

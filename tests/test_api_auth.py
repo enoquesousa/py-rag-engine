@@ -108,6 +108,30 @@ def test_config_does_not_reveal_token_and_token_wins_over_local_flag(monkeypatch
     assert result.status == 401
 
 
+def test_token_configurations_have_independent_keys_without_exposing_sensitive_state():
+    first = AccessConfig.from_env({"RAG_API_TOKEN": TOKEN})
+    second = AccessConfig.from_env({"RAG_API_TOKEN": TOKEN})
+    assert first.comparison_key != second.comparison_key
+    assert first.token_digest != second.token_digest
+    for config in (first, second):
+        assert config.comparison_key is not None and len(config.comparison_key) == 32
+        assert config.token_digest is not None and len(config.token_digest) == 32
+        assert repr(config.comparison_key) not in repr(config)
+        assert repr(config.token_digest) not in repr(config)
+        result = _invoke(APIAccessMiddleware(_ok, config), _scope(headers=[AUTH]))
+        assert result.status == 200
+
+
+@pytest.mark.parametrize(("digest", "key", "local"), [
+    (b"d" * 32, None, False), (b"d" * 32, b"k" * 31, False),
+    (b"d" * 31, b"k" * 32, False), (b"d" * 32, b"k" * 32, True),
+    (None, b"k" * 32, True), (None, None, False),
+])
+def test_incomplete_or_conflicting_access_state_fails_closed(digest, key, local):
+    with pytest.raises(RuntimeError):
+        AccessConfig(token_digest=digest, local_only=local, comparison_key=key)
+
+
 @pytest.mark.parametrize(("method", "path"), [
     ("GET", "/health"), ("GET", "/documents"), ("POST", "/documents"),
     ("POST", "/query"), ("GET", "/docs"), ("GET", "/redoc"),
@@ -365,7 +389,7 @@ def test_real_lifespan_disposes_engine_after_startup_or_request_failure(monkeypa
     monkeypatch.setattr(app_module, "PostgresEmbeddingStore", lambda *args, **kwargs: store)
     monkeypatch.setattr(app_module, "LMStudioClient", lambda config: object())
     monkeypatch.setattr(app_module, "make_lm_studio_embed", lambda client: object())
-    monkeypatch.setattr(app_module, "CrossEncoderReranker", lambda: object())
+    monkeypatch.setattr(app_module, "CrossEncoderReranker", object)
     if failure == "startup":
         store.create_schema.side_effect = RuntimeError("synthetic startup failure")
 
