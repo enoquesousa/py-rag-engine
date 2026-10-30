@@ -92,6 +92,20 @@ brought in noise that could mislead the generator.
 | `EVAL_SMOKE` | `0` | `1` = 1 q × 1 chunk × 1 model |
 | `EVAL_USE_OFFICIAL_RAGAS` | `0` | `1` = try official ragas with fallback |
 
+The evaluation CLI uses the database and model connections directly; it does
+not call the HTTP API and does not require `RAG_API_TOKEN`. A full DSN takes
+precedence over the separate database fields. Prefer those fields when entering
+a password so `PostgresConfig` can escape special characters correctly. The
+configuration representation and script header omit the entire DSN, including
+its query parameters. Keep credentials out of `LM_STUDIO_BASE_URL`: that URL is
+part of diagnostic and evaluation reports.
+
+Use a dedicated evaluation database. The runner drops and recreates its
+per-configuration tables. Reports contain source questions, generated answers,
+and retrieved content, so protect them with the same access controls as the
+input documents. Tokenizer bootstrap downloads retain normal TLS certificate
+verification; they do not disable certificate revocation checks.
+
 ## Chat model auto-detection
 
 The script picks a chat model from LM Studio's `/v1/models` in this order:

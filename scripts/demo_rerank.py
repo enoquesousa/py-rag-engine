@@ -97,7 +97,7 @@ def main() -> None:
 
     # ── 3. Persist ──────────────────────────────────────────────────────────
     _print_section("3) PERSIST (PostgreSQL + pgvector)")
-    print(f"postgres_url      = {postgres_url}")
+    print("postgres          = configured")
     print(f"storage_model     = {args.storage_model}")
     engine = create_engine(postgres_url)
     if args.reset_table:

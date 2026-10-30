@@ -53,10 +53,10 @@ from pathlib import Path
 
 
 def _ensure_tiktoken_cache() -> None:
-    """Pre-download cl100k_base.tiktoken using curl --ssl-no-revoke.
+    """Pre-download cl100k_base.tiktoken with normal TLS verification.
 
-    Avoids RAGAS choking on Windows certificate revocation checks during eval.
-    Safe no-op when the cache file is already present.
+    Leave certificate validation enabled and fail on HTTP errors.
+    This is a no-op when the cache file is already present.
     """
     url = "https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken"
     cache_dir = Path(os.environ.get(
@@ -69,7 +69,7 @@ def _ensure_tiktoken_cache() -> None:
         return
     try:
         subprocess.run(
-            ["curl.exe", "-sSL", "--max-time", "30", "--ssl-no-revoke", url, "-o", str(target)],
+            ["curl.exe", "-fsSL", "--max-time", "30", url, "-o", str(target)],
             check=True, capture_output=True,
         )
     except Exception as exc:                                                   # pragma: no cover
@@ -124,7 +124,7 @@ def _print_header(
     except Exception as exc:
         print(f"GPU       : torch import failed ({exc})")
     print(f"Document  : {eval_doc}")
-    print(f"DB URL    : {pg_cfg.url}")
+    print("PostgreSQL: configured")
     print(f"LM Studio : {lm_cfg.base_url}")
     print(f"Embed mdl : {lm_cfg.embed_model}")
 

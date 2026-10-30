@@ -11,7 +11,8 @@ Pré-requisitos:
 Execução (PowerShell):
     $env:LM_STUDIO_BASE_URL    = "http://localhost:1234"
     $env:LM_STUDIO_EMBED_MODEL = "text-embedding-bge-m3"
-    $env:DEMO_POSTGRES_URL     = "postgresql+psycopg://postgres:admin@localhost:5434/rag"
+    $env:POSTGRES_PASSWORD    = "<your-password>"
+    $env:POSTGRES_PORT        = "5434"
     .venv\Scripts\python.exe scripts\demo_hybrid.py
 """
 from __future__ import annotations
@@ -177,7 +178,7 @@ def main() -> None:
     _print_header("1) Setup")
     print(f"  lm_studio_url    = {lm_cfg.base_url}")
     print(f"  embed_model      = {lm_cfg.embed_model}")
-    print(f"  postgres_url     = {postgres_url}")
+    print("  postgres         = configured")
     print(f"  storage_model    = {EMBED_MODEL_NAME}")
     print(f"  table            = {TABLE_NAME}")
     print(f"  corpus_size      = {len(CORPUS)} documentos")

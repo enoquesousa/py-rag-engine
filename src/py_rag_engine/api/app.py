@@ -14,6 +14,8 @@ from py_rag_engine.retrieval import CrossEncoderReranker
 from py_rag_engine.storage import PostgresEmbeddingStore
 from py_rag_engine.storage.postgres import EMBEDDING_MODEL_DIMENSIONS
 
+from .access import AccessConfig
+from .middleware import APIAccessMiddleware
 from .routes import router
 
 
@@ -35,29 +37,34 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         EMBEDDING_MODEL_DIMENSIONS[embed_model] = int(dims_env)
 
     engine = create_engine(pg_cfg.url)
-    store = PostgresEmbeddingStore(engine, embedding_model=embed_model)
-    store.create_schema()
+    try:
+        store = PostgresEmbeddingStore(engine, embedding_model=embed_model)
+        store.create_schema()
 
-    client = LMStudioClient(lm_cfg)
-    embed = make_lm_studio_embed(client)
-    reranker = CrossEncoderReranker()
+        client = LMStudioClient(lm_cfg)
+        embed = make_lm_studio_embed(client)
+        reranker = CrossEncoderReranker()
 
-    app.state.store = store
-    app.state.embed = embed
-    app.state.reranker = reranker
-    app.state.lm_client = client
+        app.state.store = store
+        app.state.embed = embed
+        app.state.reranker = reranker
+        app.state.lm_client = client
 
-    yield
-
-    engine.dispose()
+        yield
+    finally:
+        engine.dispose()
 
 
 def create_app() -> FastAPI:
     """Factory for the py-rag-engine REST API.
 
-    Run with:
-        uvicorn "py_rag_engine.api:create_app" --factory --reload
+    Set RAG_API_TOKEN, or explicitly opt into RAG_API_LOCAL_ONLY=1, then run:
+        uvicorn "py_rag_engine.api:create_app" --factory --no-proxy-headers
+
+    All routes require the selected access policy. Forwarding headers are rejected;
+    a TLS proxy must use a loopback hop and remove them before forwarding requests.
     """
+    access = AccessConfig.from_env()
     app = FastAPI(
         title="py-rag-engine",
         description=(
@@ -68,5 +75,6 @@ def create_app() -> FastAPI:
         version="0.1.0",
         lifespan=_lifespan,
     )
+    app.add_middleware(APIAccessMiddleware, config=access)
     app.include_router(router)
     return app

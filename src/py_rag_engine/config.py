@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from ipaddress import IPv6Address
+
+from sqlalchemy.engine import URL
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,7 +51,8 @@ class PostgresConfig:
     accepts either a full DSN (preferred) or the standard `POSTGRES_*` parts.
     """
 
-    url: str
+    # Omit the whole DSN: query parameters can contain secrets too.
+    url: str = field(repr=False)
 
     @classmethod
     def from_env(cls, *, var: str = "EVAL_POSTGRES_URL") -> "PostgresConfig":
@@ -64,7 +68,11 @@ class PostgresConfig:
                POSTGRES_DB         (default: rag)
 
         Raises:
-            RuntimeError when neither path supplies credentials.
+            RuntimeError when neither path supplies credentials or the separate
+            host/port fields cannot safely describe a connection.
+
+        A full DSN is returned unchanged and may use external authentication.
+        Separate user, password and database fields are URL-encoded by SQLAlchemy.
         """
         url = os.environ.get(var)
         if url:
@@ -78,10 +86,51 @@ class PostgresConfig:
                 "POSTGRES_PORT / POSTGRES_DB)."
             )
         user = os.environ.get("POSTGRES_USER", "postgres")
-        host = os.environ.get("POSTGRES_HOST", "localhost")
-        port = os.environ.get("POSTGRES_PORT", "5432")
+        host = _postgres_host(os.environ.get("POSTGRES_HOST", "localhost"))
+        port = _postgres_port(os.environ.get("POSTGRES_PORT", "5432"))
         db = os.environ.get("POSTGRES_DB", "rag")
-        return cls(url=f"postgresql+psycopg://{user}:{password}@{host}:{port}/{db}")
+        connection_url = URL.create(
+            "postgresql+psycopg",
+            username=user,
+            password=password,
+            host=host,
+            port=port,
+            database=db,
+        )
+        return cls(url=connection_url.render_as_string(hide_password=False))
+
+
+def _postgres_port(value: str) -> int:
+    """Validate a separate TCP port without echoing environment contents."""
+    message = "POSTGRES_PORT must be an integer from 1 to 65535."
+    if not value.isascii() or not value.isdecimal():
+        raise RuntimeError(message)
+    try:
+        port = int(value)
+    except ValueError:
+        raise RuntimeError(message) from None
+    if not 1 <= port <= 65535:
+        raise RuntimeError(message)
+    return port
+
+
+def _postgres_host(value: str) -> str:
+    """Keep an authority host from introducing other URL components."""
+    message = "POSTGRES_HOST must be a hostname or IP address without URL separators."
+    bracketed = value.startswith("[") and value.endswith("]")
+    if bracketed:
+        value = value[1:-1]
+    if bracketed or ":" in value:
+        try:
+            IPv6Address(value)
+        except ValueError:
+            raise RuntimeError(message) from None
+    if any(
+        char in "/?#@[]\\" or char.isspace() or ord(char) < 32 or ord(char) == 127
+        for char in value
+    ):
+        raise RuntimeError(message)
+    return value
 
 
 @dataclass(frozen=True, slots=True)

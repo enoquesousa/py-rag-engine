@@ -22,6 +22,9 @@ Library code lives under `src/py_rag_engine/`, CLI entry points under
 | `py_rag_engine.retrieval` | Dense ranking + cross-encoder re-ranking |
 | `py_rag_engine.generation` | LLM-grounded answer generation (LM Studio chat) |
 | `py_rag_engine.evaluation` | RAGAS-style metrics and the `EvalRunner` orchestrator |
+| `py_rag_engine.api.app` | Application factory, startup resources, and shutdown disposal |
+| `py_rag_engine.api.access` | Startup access configuration and header/connection authorization |
+| `py_rag_engine.api.middleware` | ASGI authentication before body parsing, total body limit, no-store responses |
 
 Each module is a *single responsibility*: clients perform HTTP, embedders
 generate vectors, the runner orchestrates. Scripts are thin CLIs (~150 LOC
@@ -211,16 +214,90 @@ Tuning notes:
 
 ## Configuration
 
-Three frozen dataclasses concentrate all environment-driven settings:
+Frozen dataclasses concentrate the environment-driven settings:
 
 | Class | Source | Used by |
 |---|---|---|
 | `LMStudioConfig` | `LM_STUDIO_*` env vars | `LMStudioClient`, scripts |
-| `PostgresConfig` | `EVAL_POSTGRES_URL` | scripts |
+| `PostgresConfig` | Named DSN (`EVAL_POSTGRES_URL` by default), otherwise `POSTGRES_*` fields | API lifespan and scripts |
 | `EvalConfig` | `EVAL_*` env vars | `scripts/eval_ragas.py` |
+| `api.access.AccessConfig` | `RAG_API_TOKEN` or explicit `RAG_API_LOCAL_ONLY=1` | API factory and middleware |
 
 Construct from environment via `LMStudioConfig.from_env()`. Override
 fields in tests by passing keyword args directly to the dataclass.
+
+`PostgresConfig.url` remains a connection string. A full DSN is accepted as
+provided, including socket or external authentication options. With separate
+fields, the password is required, the host and port are validated, and
+SQLAlchemy 2.1+ escapes the user, password, and database name. This dependency
+requires Python 3.11 or later. The whole DSN is
+excluded from the dataclass representation because query parameters can also
+contain secrets. Scripts report only that PostgreSQL is configured. Avoid
+logging `.url` or passing secrets in command-line arguments.
+
+## HTTP access and request flow
+
+The factory reads and validates `AccessConfig` before the lifespan creates a
+database engine or model clients. It refuses to start without an explicit
+access mode. This requirement applies to the API factory, not to importing
+the package or using its CLI/library interfaces.
+
+```mermaid
+flowchart TD
+    Client["HTTP client"] --> Gate["Connection and header policy"]
+    Gate -->|"denied"| Error["Fixed error response"]
+    Gate -->|"authorized"| Body["10 MiB body gate and spool"]
+    Body -->|"too large"| Error
+    Body -->|"accepted"| Route["FastAPI route and parsing"]
+    Route --> Store["PostgreSQL store"]
+    Route --> Model["LM Studio and reranker"]
+    Store --> Result["Document, query, or health response"]
+    Model --> Result
+```
+
+The policy is applied to every HTTP route, including health, docs, and OpenAPI.
+Authentication occurs before receiving and parsing a multipart upload. Bodies
+up to 1 MiB are held in memory; larger bodies spill to a temporary file. The
+10 MiB cap includes multipart framing. The spool is closed after the request,
+including rejection and disconnect paths. Responses through the middleware
+carry `Cache-Control: no-store`. WebSocket connections are closed; this API has
+no WebSocket authentication protocol.
+
+In token mode, one `Authorization: Bearer ...` header is checked with
+`hmac.compare_digest`. The validated token and its length are encoded into an
+internal fixed-size buffer so the comparison uses equal-sized inputs without
+content-dependent short-circuiting. The expected buffer is omitted from the
+configuration representation. Padding is not encryption: it retains the token
+bytes in process memory. The configured
+token must be 32–4096 ASCII Bearer-token characters. Missing, empty, malformed,
+duplicate, and incorrect credentials are distinguished only with fixed errors;
+their values are never included in those errors. Credential query parameters
+are rejected. The token is not forwarded to PostgreSQL or LM Studio.
+
+Token-bearing traffic needs HTTPS or an actual loopback connection. Run Uvicorn
+with `--no-proxy-headers`. The app rejects `Forwarded` and all `X-Forwarded-*`
+headers even when an outer ASGI proxy middleware has already rewritten the
+scope. For a same-host TLS proxy, bind the backend to loopback and strip these
+headers. See the [README](../README.md#bearer-access-and-https) for commands.
+
+Without a token, `RAG_API_LOCAL_ONLY=1` explicitly allows same-machine clients.
+The peer must be a literal loopback address; `Host` must identify loopback or
+`localhost`; an `Origin`, if present, must match the authority exactly after
+scheme/host/default-port normalization. Cross-site fetch metadata is refused.
+No DNS lookup decides whether a peer or authority is local. Authorization
+headers are refused in this mode to avoid implying that an unconfigured token
+was validated.
+Do not publish local-only mode through a proxy: a same-host proxy counts as a
+loopback peer. Remote access through a proxy must use token mode.
+
+The single token grants access to the entire corpus. `metadata_filter` and
+`embedding_model` select retrieval results; they are not tenant permissions.
+There are no sessions, JWTs, refresh tokens, user identities, or document ACLs.
+Changing the token requires restarting the application, which replaces the
+credential snapshot. The plaintext token remains in the process environment
+and configuration memory, accessible to the process and its administrators.
+See [SECURITY.md](../SECURITY.md) for the
+separate database/model trust boundaries and resource limits.
 
 ## Data Layout
 

@@ -11,22 +11,26 @@ license = { file = "LICENSE" }
 authors = [
     { name = "Your Name", email = "you@example.com" },
 ]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
-    "langchain-text-splitters>=0.2.0",
-    "pypdf>=4.0.0",
+    "langchain-text-splitters>=1.1.2",
+    # Keep the splitters' serialization dependency above its security floor.
+    "langchain-core>=1.3.3",
+    "pypdf>=6.21.2",
     "numpy>=1.24.0",
     "pgvector>=0.4.0",
     "psycopg[binary]>=3.2.0",
-    "SQLAlchemy>=2.0.0",
+    "SQLAlchemy[asyncio]>=2.1.0",
     "pydantic>=2.6.0",
 ]
 
 [project.optional-dependencies]
 api = [
     "fastapi>=0.110.0",
+    # Enforce the patched form parser across FastAPI dependency resolution.
+    "starlette>=1.3.1",
     "uvicorn[standard]>=0.27.0",
-    "python-multipart>=0.0.9",
+    "python-multipart>=0.0.31",
 ]
 embeddings = [
     "openai>=1.0.0",
@@ -50,7 +54,7 @@ eval = [
 packages = ["src/py_rag_engine"]
 
 [dependency-groups]
-dev = ["pytest>=8.0.0"]
+dev = ["pytest>=8.0.0", "httpx>=0.28.1"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -58,4 +62,4 @@ pythonpath = ["src"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
